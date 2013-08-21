@@ -1,0 +1,10 @@
+mixxx/build/*.pyc
+mixxx/cache
+mixxx/config.log
+mixxx/lib/**/*.o
+mixxx/lib/**/*.os
+mixxx/mixxx
+mixxx/res/qrc_mixxx.cc
+mixxx/res/qrc_mixxx.o
+mixxx/.sconf_temp
+mixxx/*_build

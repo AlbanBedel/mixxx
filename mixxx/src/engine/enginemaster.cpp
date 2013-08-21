@@ -95,6 +95,17 @@ EngineMaster::EngineMaster(ConfigObject<ConfigValue> * _config,
     memset(m_pHead, 0, sizeof(CSAMPLE) * MAX_BUFFER_LEN);
     memset(m_pMaster, 0, sizeof(CSAMPLE) * MAX_BUFFER_LEN);
 
+    // Setup the output buses
+    for (int o = EngineChannel::LEFT ; o <= EngineChannel::RIGHT ; o++) {
+        struct OutputBus* bus = &m_OutputBus[o];
+        bus->m_pBuffer = SampleUtil::alloc(MAX_BUFFER_LEN);
+        memset(bus->m_pBuffer, 0, sizeof(CSAMPLE) * MAX_BUFFER_LEN);
+        bus->m_OrientationGain.setGains(1.0,
+                                         1.0*(o == EngineChannel::LEFT),
+                                         1.0*(o == EngineChannel::CENTER),
+                                         1.0*(o == EngineChannel::RIGHT));
+    }
+
     //Starts a thread for recording and shoutcast
     sidechain = NULL;
     if (bEnableSidechain) {
@@ -141,6 +152,8 @@ EngineMaster::~EngineMaster()
 
     SampleUtil::free(m_pHead);
     SampleUtil::free(m_pMaster);
+    for (int o = EngineChannel::LEFT ; o <= EngineChannel::RIGHT ; o++)
+        SampleUtil::free(m_OutputBus[o].m_pBuffer);
 
     QMutableListIterator<ChannelInfo*> channel_it(m_channels);
     while (channel_it.hasNext()) {
@@ -344,7 +357,7 @@ void EngineMaster::process(const CSAMPLE *, const CSAMPLE *pOut, const int iBuff
 
     // Bitvector of enabled channels
     const unsigned int maxChannels = 32;
-    unsigned int masterOutput = 0;
+    unsigned int outputBus[3] = { 0, 0, 0 };
     unsigned int headphoneOutput = 0;
 
     // Compute headphone mix
@@ -368,7 +381,7 @@ void EngineMaster::process(const CSAMPLE *, const CSAMPLE *pOut, const int iBuff
 
         bool needsProcessing = false;
         if (pChannel->isMaster()) {
-            masterOutput |= (1 << channel_number);
+            outputBus[pChannel->getOrientation()] |= (1 << channel_number);
             needsProcessing = true;
         }
 
@@ -390,6 +403,11 @@ void EngineMaster::process(const CSAMPLE *, const CSAMPLE *pOut, const int iBuff
     m_headphoneGain.setGain(chead_gain);
     mixChannels(headphoneOutput, maxChannels, m_pHead, iBufferSize, &m_headphoneGain);
 
+    // Make the mix for each input of the cross fader
+    for (int o = EngineChannel::LEFT ; o <= EngineChannel::RIGHT ; o++)
+        mixChannels(outputBus[o], maxChannels, m_OutputBus[o].m_pBuffer, iBufferSize,
+                    &m_OutputBus[o].m_OrientationGain);
+
     // Calculate the crossfader gains for left and right side of the crossfader
     float c1_gain, c2_gain;
     EngineXfader::getXfadeGains(c1_gain, c2_gain,
@@ -398,11 +416,13 @@ void EngineMaster::process(const CSAMPLE *, const CSAMPLE *pOut, const int iBuff
                                 xFaderMode->get()==MIXXX_XFADER_CONSTPWR,
                                 xFaderReverse->get()==1.0);
 
-    // Now set the gains for overall volume and the left, center, right gains.
-    m_masterGain.setGains(m_pMasterVolume->get(), c1_gain, 1.0, c2_gain);
-
-    // Perform the master mix
-    mixChannels(masterOutput, maxChannels, m_pMaster, iBufferSize, &m_masterGain);
+    // And mix the 3 into the master
+    float master_gain = m_pMasterVolume->get();
+    SampleUtil::copy3WithGain(m_pMaster,
+                              m_OutputBus[EngineChannel::LEFT].m_pBuffer, c1_gain*master_gain,
+                              m_OutputBus[EngineChannel::CENTER].m_pBuffer, master_gain,
+                              m_OutputBus[EngineChannel::RIGHT].m_pBuffer, c2_gain*master_gain,
+                              iBufferSize);
 
 #ifdef __LADSPA__
     // LADPSA master effects
@@ -486,6 +506,12 @@ const CSAMPLE* EngineMaster::getDeckBuffer(unsigned int i) const {
     return getChannelBuffer(QString("[Channel%1]").arg(i+1));
 }
 
+const CSAMPLE* EngineMaster::getOutputBusBuffer(unsigned int i) const {
+    if (i <= EngineChannel::RIGHT)
+        return m_OutputBus[i].m_pBuffer;
+    return NULL;
+}
+
 const CSAMPLE* EngineMaster::getChannelBuffer(QString group) const {
     for (QList<ChannelInfo*>::const_iterator i = m_channels.constBegin();
          i != m_channels.constEnd(); ++i) {
@@ -504,6 +530,9 @@ const CSAMPLE* EngineMaster::buffer(AudioOutput output) const {
         break;
     case AudioOutput::HEADPHONES:
         return getHeadphoneBuffer();
+        break;
+    case AudioOutput::BUS:
+        return getOutputBusBuffer(output.getIndex());
         break;
     case AudioOutput::DECK:
         return getDeckBuffer(output.getIndex());

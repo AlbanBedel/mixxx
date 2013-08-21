@@ -54,6 +54,7 @@ BpmControl::BpmControl(const char* _group,
         ConfigKey(_group, "loop_end_position"));
 
     m_pFileBpm = new ControlObject(ConfigKey(_group, "file_bpm"));
+    m_pLocalBpm = new ControlObject(ConfigKey(_group, "local_bpm"));
     connect(m_pFileBpm, SIGNAL(valueChanged(double)),
             this, SLOT(slotAdjustBpm()),
             Qt::DirectConnection);
@@ -97,6 +98,7 @@ BpmControl::BpmControl(const char* _group,
 
 BpmControl::~BpmControl() {
     delete m_pEngineBpm;
+    delete m_pLocalBpm;
     delete m_pFileBpm;
     delete m_pButtonSync;
     delete m_pButtonSyncTempo;
@@ -107,6 +109,60 @@ BpmControl::~BpmControl() {
 
 double BpmControl::getBpm() {
     return m_pEngineBpm->get();
+}
+
+double BpmControl::getLocalBpm() {
+    if (!m_pBeats)
+        return -1;
+
+    double dCurrentBeat = m_pBeats->findClosestBeat(getCurrentSample());
+    if (dCurrentBeat < 0)
+      return -1;
+
+    double dFirstBeat = -1;
+    int iBackBeatCount = 2;
+    while (iBackBeatCount > 1 && dFirstBeat < 0) {
+        dFirstBeat = m_pBeats->findNthBeat(dCurrentBeat, -iBackBeatCount);
+        iBackBeatCount -= 1;
+    }
+
+    double dLastBeat = -1;
+    for (int n = 8-iBackBeatCount ; dLastBeat < 0 && n > 1 ; n -= 1)
+        dLastBeat = m_pBeats->findNthBeat(dCurrentBeat, n);
+
+    return dLastBeat >= 0 ? m_pBeats->getBpmRange(dFirstBeat, dLastBeat) : -1;
+}
+
+void BpmControl::startLocalBpmTimer() {
+    if (m_pBeats && m_iLocalBpmTimer == 0)
+        m_iLocalBpmTimer = startTimer(250);
+}
+
+void BpmControl::stopLocalBpmTimer() {
+    if (m_iLocalBpmTimer != 0) {
+        killTimer(m_iLocalBpmTimer);
+        m_iLocalBpmTimer = 0;
+    }
+}
+
+void BpmControl::timerEvent(QTimerEvent *event) {
+    if (event->timerId() == m_iLocalBpmTimer) {
+        updateLocalBpm();
+    }
+}
+
+void BpmControl::updateLocalBpm() {
+    double dLocalBpm = getLocalBpm();
+    //qDebug() << "Computed local BPM:" << dLocalBpm;
+    if (dLocalBpm > 0.0) {
+        double dLastLocalBpm = m_pLocalBpm->get();
+        if (abs(dLastLocalBpm - dLocalBpm) < dLocalBpm/20.0)
+            dLocalBpm = (dLocalBpm + dLastLocalBpm) / 2;
+        m_pLocalBpm->set(dLocalBpm);
+    } else {
+        m_pLocalBpm->set(0.0);
+    }
+    slotAdjustBpm();
 }
 
 double BpmControl::getFileBpm() {
@@ -181,6 +237,7 @@ bool BpmControl::syncTempo(EngineBuffer* pOtherEngineBuffer) {
 
     double fThisBpm  = m_pEngineBpm->get();
     double fThisFileBpm = m_pFileBpm->get();
+    double fThisLocalBpm = m_pLocalBpm->get();
 
     double fOtherBpm = pOtherEngineBuffer->getBpm();
     double fOtherFileBpm = pOtherEngineBuffer->getFileBpm();
@@ -218,11 +275,11 @@ bool BpmControl::syncTempo(EngineBuffer* pOtherEngineBuffer) {
     //
     // thisRateScale = ((otherFileBpm * (1.0 + otherRate)) / thisFileBpm - 1.0) / (thisRateDir * thisRateRange)
 
-    if (fOtherBpm > 0.0 && fThisBpm > 0.0) {
+    if (fOtherBpm > 0.0 && fThisBpm > 0.0 && fThisLocalBpm > 0.0) {
         // The desired rate is the other decks effective rate divided by this
         // deck's file BPM. This gives us the playback rate that will produce an
         // effective BPM equivalent to the other decks.
-        double fDesiredRate = fOtherBpm / fThisFileBpm;
+        double fDesiredRate = fOtherBpm / fThisLocalBpm;
 
         // Test if this buffer's bpm is the double of the other one, and adjust
         // the rate scale. I believe this is intended to account for our BPM
@@ -437,7 +494,7 @@ void BpmControl::slotAdjustBpm() {
     // Adjust the file-bpm with the current setting of the rate to get the
     // engine BPM.
     double dRate = 1.0 + m_pRateDir->get() * m_pRateRange->get() * m_pRateSlider->get();
-    m_pEngineBpm->set(m_pFileBpm->get() * dRate);
+    m_pEngineBpm->set(m_pLocalBpm->get() * dRate);
 }
 
 void BpmControl::trackLoaded(TrackPointer pTrack) {
@@ -450,12 +507,14 @@ void BpmControl::trackLoaded(TrackPointer pTrack) {
         m_pBeats = m_pTrack->getBeats();
         connect(m_pTrack.data(), SIGNAL(beatsUpdated()),
                 this, SLOT(slotUpdatedTrackBeats()));
+        startLocalBpmTimer();
     }
 }
 
 void BpmControl::trackUnloaded(TrackPointer pTrack) {
     Q_UNUSED(pTrack);
     if (m_pTrack) {
+        stopLocalBpmTimer();
         disconnect(m_pTrack.data(), SIGNAL(beatsUpdated()),
                    this, SLOT(slotUpdatedTrackBeats()));
     }
@@ -468,6 +527,11 @@ void BpmControl::slotUpdatedTrackBeats()
     if (m_pTrack) {
         m_pBeats = m_pTrack->getBeats();
     }
+
+    if (m_pBeats)
+        startLocalBpmTimer();
+    else
+        stopLocalBpmTimer();
 }
 
 void BpmControl::slotBeatsTranslate(double v) {

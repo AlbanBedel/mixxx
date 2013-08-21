@@ -21,6 +21,9 @@ class BpmControl : public EngineControl {
     double getBpm();
     double getFileBpm();
 
+  protected:
+    virtual void timerEvent(QTimerEvent *event);
+
   public slots:
 
     virtual void trackLoaded(TrackPointer pTrack);
@@ -45,6 +48,13 @@ class BpmControl : public EngineControl {
     // ControlObjects that come from PlayerManager
     ControlObject* m_pNumDecks;
 
+    double getLocalBpm();
+    void updateLocalBpm();
+
+    void startLocalBpmTimer();
+    void stopLocalBpmTimer();
+    int m_iLocalBpmTimer;
+
     // ControlObjects that come from EngineBuffer
     ControlObject* m_pPlayButton;
     ControlObject* m_pRateSlider;
@@ -58,6 +68,9 @@ class BpmControl : public EngineControl {
 
     /** The current loaded file's detected BPM */
     ControlObject* m_pFileBpm;
+
+    /** The BPM at the current play position*/
+    ControlObject* m_pLocalBpm;
 
     /** The current effective BPM of the engine */
     ControlObject* m_pEngineBpm;

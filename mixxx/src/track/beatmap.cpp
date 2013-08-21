@@ -168,6 +168,10 @@ double BeatMap::findClosestBeat(double dSamples) const {
     }
     double nextBeat = findNextBeat(dSamples);
     double prevBeat = findPrevBeat(dSamples);
+    if (nextBeat < 0)
+        return prevBeat;
+    if (prevBeat < 0)
+        return nextBeat;
     return (nextBeat - dSamples > dSamples - prevBeat) ? prevBeat : nextBeat;
 }
 
